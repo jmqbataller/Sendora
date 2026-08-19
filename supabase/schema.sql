@@ -6,6 +6,8 @@ create extension if not exists pgcrypto;
 create table if not exists public.files (
   id uuid primary key default gen_random_uuid(),
   code text unique not null,
+  share_code text not null,
+  position integer not null default 0 check (position >= 0),
   original_name text not null,
   mime_type text not null default 'application/octet-stream',
   size_bytes bigint not null check (size_bytes > 0),
@@ -16,7 +18,14 @@ create table if not exists public.files (
   download_count integer not null default 0 check (download_count >= 0)
 );
 
+-- Upgrade existing Sendora projects created before multi-file sharing.
+alter table public.files add column if not exists share_code text;
+alter table public.files add column if not exists position integer not null default 0;
+update public.files set share_code = code where share_code is null;
+alter table public.files alter column share_code set not null;
+
 create index if not exists files_code_idx on public.files(code);
+create index if not exists files_share_code_idx on public.files(share_code);
 create index if not exists files_expires_at_idx on public.files(expires_at);
 
 alter table public.files enable row level security;
@@ -38,7 +47,7 @@ on conflict (id) do update set
   allowed_mime_types = null;
 
 -- Anonymous browser uploads are allowed into the private bucket.
--- File type is intentionally unrestricted; the size cap still applies.
+-- File type is intentionally unrestricted; the 200 MB per-file cap still applies.
 do $$
 begin
   if not exists (
