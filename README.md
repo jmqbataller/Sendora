@@ -4,12 +4,18 @@
 
 Sendora is a modern file-sharing app for sharing virtually any file type through expiring links and QR codes.
 
-## v0.3 features
+## v0.4 features
 
 - Upload up to 100 files in one Sendora share
 - One share link and QR code for the whole batch
 - Drag-and-drop and multi-select upload for any file extension
 - Images, videos, audio, PDFs, documents, archives, code files, installers, and more
+- Optional automatic image-size optimization before upload
+- Light, Balanced, and Strong image compression levels
+- JPEG, PNG, and WebP optimization runs locally in the browser
+- Optimized images are used only when the generated WebP copy is meaningfully smaller
+- One-click **Download all as ZIP** for multi-file shares
+- Bulk ZIP progress and duplicate-filename handling
 - Configurable expiry: 1 hour, 24 hours, 3 days, or 7 days
 - Download limits: 1, 5, 10, 25, or unlimited per file
 - Automatic share links
@@ -19,7 +25,7 @@ Sendora is a modern file-sharing app for sharing virtually any file type through
 - Download-only handling for unsupported or executable formats
 - Private Supabase Storage bucket
 - Server-generated signed download URLs
-- Original filenames preserved on download
+- Original filenames preserved on normal downloads
 - Download counter and expiry enforcement
 - Responsive landing page and share experience
 - Default 200 MB per-file limit, configurable with an environment variable
@@ -30,6 +36,7 @@ Sendora is a modern file-sharing app for sharing virtually any file type through
 - React + TypeScript
 - Tailwind CSS
 - Supabase Database + Storage
+- fflate for browser-side ZIP creation
 - qrcode.react
 - Lucide icons
 - Vercel-ready
@@ -78,13 +85,22 @@ Import this repository into Vercel, add the same environment variables, and depl
 - Default maximum size per file: **200 MB**
 - There is no app-level total batch-size cap, so your effective total upload capacity depends on your Supabase Storage quota, browser/network reliability, and hosting plan.
 
+## Image optimization
+
+When enabled, Sendora tries to optimize JPEG, PNG, and WebP images before upload. It can resize large dimensions and create a WebP version according to the selected compression level. If the result is not at least about 5% smaller, the original image is uploaded instead. GIF and SVG files are left unchanged.
+
+## Bulk ZIP downloads
+
+When at least two files in a share are still available, the recipient sees **Download all as ZIP**. The browser downloads the available files, packages them into one ZIP, and then saves it locally. Each file included in the ZIP counts as one download against that file's download limit.
+
+Very large ZIPs may require substantial browser memory because the archive is prepared client-side.
+
 ## Security note
 
 Sendora accepts arbitrary file extensions, but unsupported or executable formats are not rendered as browser previews. Recipients should only download files they trust. For a public production service, malware scanning and abuse controls should be added before allowing unrestricted anonymous uploads at scale.
 
 ## Roadmap
 
-- Download all files as ZIP
 - Password-protected shares
 - Delete-after-first-download mode
 - User accounts and upload history
