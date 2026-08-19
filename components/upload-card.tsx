@@ -5,10 +5,15 @@ import {
   Check,
   ChevronDown,
   Copy,
+  File,
+  FileArchive,
+  FileCode2,
   FileImage,
+  FileText,
   Film,
   Link2,
   LoaderCircle,
+  Music,
   QrCode,
   UploadCloud,
   X,
@@ -25,8 +30,8 @@ const MAX_FILE_MB = Number(process.env.NEXT_PUBLIC_MAX_FILE_MB || 200);
 
 function formatBytes(bytes: number) {
   if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  const index = Math.floor(Math.log(bytes) / Math.log(1024));
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / 1024 ** index).toFixed(index > 1 ? 1 : 0)} ${units[index]}`;
 }
 
@@ -34,6 +39,33 @@ function randomCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
   const values = crypto.getRandomValues(new Uint32Array(8));
   return Array.from(values, (value) => alphabet[value % alphabet.length]).join("");
+}
+
+function extensionOf(name: string) {
+  const index = name.lastIndexOf(".");
+  return index > -1 && index < name.length - 1 ? name.slice(index + 1).toLowerCase() : "";
+}
+
+function fileKind(file: File) {
+  const extension = extensionOf(file.name);
+  if (file.type.startsWith("image/")) return "Image";
+  if (file.type.startsWith("video/")) return "Video";
+  if (file.type.startsWith("audio/")) return "Audio";
+  if (file.type === "application/pdf" || ["doc", "docx", "txt", "rtf", "odt", "xls", "xlsx", "csv", "ppt", "pptx"].includes(extension)) return "Document";
+  if (["zip", "rar", "7z", "tar", "gz", "bz2"].includes(extension)) return "Archive";
+  if (["html", "css", "js", "jsx", "ts", "tsx", "json", "xml", "py", "php", "java", "c", "cpp", "cs", "go", "rs", "sql"].includes(extension)) return "Code file";
+  return extension ? `${extension.toUpperCase()} file` : "File";
+}
+
+function FileTypeIcon({ file }: { file: File }) {
+  const extension = extensionOf(file.name);
+  if (file.type.startsWith("image/")) return <FileImage className="size-5" />;
+  if (file.type.startsWith("video/")) return <Film className="size-5" />;
+  if (file.type.startsWith("audio/")) return <Music className="size-5" />;
+  if (["zip", "rar", "7z", "tar", "gz", "bz2"].includes(extension)) return <FileArchive className="size-5" />;
+  if (["html", "css", "js", "jsx", "ts", "tsx", "json", "xml", "py", "php", "java", "c", "cpp", "cs", "go", "rs", "sql"].includes(extension)) return <FileCode2 className="size-5" />;
+  if (file.type === "application/pdf" || ["doc", "docx", "txt", "rtf", "odt", "xls", "xlsx", "csv", "ppt", "pptx"].includes(extension)) return <FileText className="size-5" />;
+  return <File className="size-5" />;
 }
 
 export function UploadCard() {
@@ -52,20 +84,12 @@ export function UploadCard() {
     process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   );
 
-  const fileTypeLabel = useMemo(() => {
-    if (!file) return "";
-    return file.type.startsWith("video/") ? "Video" : "Image";
-  }, [file]);
+  const fileTypeLabel = useMemo(() => (file ? fileKind(file) : ""), [file]);
 
   function chooseFile(nextFile?: File) {
     setError("");
     setResult(null);
     if (!nextFile) return;
-
-    if (!nextFile.type.startsWith("image/") && !nextFile.type.startsWith("video/")) {
-      setError("Sendora currently accepts image and video files.");
-      return;
-    }
 
     if (nextFile.size > MAX_FILE_MB * 1024 * 1024) {
       setError(`That file is larger than the ${MAX_FILE_MB} MB upload limit.`);
@@ -105,15 +129,17 @@ export function UploadCard() {
 
       const supabase = createClient();
       const code = randomCode();
-      const extension = file.name.includes(".") ? file.name.split(".").pop() : "bin";
-      const storagePath = `${code}/${crypto.randomUUID()}.${extension}`;
+      const rawExtension = extensionOf(file.name);
+      const safeExtension = rawExtension.replace(/[^a-z0-9]/gi, "").slice(0, 24);
+      const storagePath = `${code}/${crypto.randomUUID()}${safeExtension ? `.${safeExtension}` : ""}`;
+      const mimeType = file.type || "application/octet-stream";
 
       setProgress(30);
       const { error: uploadError } = await supabase.storage
         .from("sendora-files")
         .upload(storagePath, file, {
           cacheControl: "3600",
-          contentType: file.type,
+          contentType: mimeType,
           upsert: false,
         });
 
@@ -126,7 +152,7 @@ export function UploadCard() {
         body: JSON.stringify({
           code,
           originalName: file.name,
-          mimeType: file.type,
+          mimeType,
           sizeBytes: file.size,
           storagePath,
           expiresAt: expiryDate(),
@@ -140,8 +166,7 @@ export function UploadCard() {
         throw new Error(body.error || "Could not create the share link.");
       }
 
-      const siteUrl = window.location.origin;
-      const url = `${siteUrl}/s/${code}`;
+      const url = `${window.location.origin}/s/${code}`;
       setProgress(100);
       setResult({ code, url });
     } catch (uploadError) {
@@ -243,14 +268,14 @@ export function UploadCard() {
             : "border-slate-300 bg-slate-50/70 hover:border-blue-400 hover:bg-blue-50/40"
         }`}
       >
-        <input ref={inputRef} type="file" accept="image/*,video/*" onChange={onInput} className="hidden" />
+        <input ref={inputRef} type="file" onChange={onInput} className="hidden" />
         <div className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl bg-white text-blue-600 shadow-sm ring-1 ring-slate-200 transition group-hover:-translate-y-1 group-hover:shadow-md">
           <UploadCloud className="size-6" />
         </div>
-        <h3 className="text-lg font-semibold tracking-tight text-slate-950">Drop a file here</h3>
+        <h3 className="text-lg font-semibold tracking-tight text-slate-950">Drop any file here</h3>
         <p className="mt-1.5 text-sm text-slate-500">or click to browse from your device</p>
-        <div className="mt-4 flex items-center justify-center gap-2 text-xs text-slate-400">
-          <span>Images & videos</span>
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2 text-xs text-slate-400">
+          <span>Any file extension</span>
           <span className="size-1 rounded-full bg-slate-300" />
           <span>Up to {MAX_FILE_MB} MB</span>
         </div>
@@ -259,7 +284,7 @@ export function UploadCard() {
       {file && (
         <div className="mt-4 flex items-center gap-3 rounded-2xl border border-slate-200 p-3.5">
           <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-blue-50 text-blue-600">
-            {file.type.startsWith("video/") ? <Film className="size-5" /> : <FileImage className="size-5" />}
+            <FileTypeIcon file={file} />
           </div>
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold text-slate-800">{file.name}</p>
@@ -270,6 +295,7 @@ export function UploadCard() {
             onClick={(event) => {
               event.stopPropagation();
               setFile(null);
+              if (inputRef.current) inputRef.current.value = "";
             }}
             className="grid size-8 place-items-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-900"
             aria-label="Remove selected file"
@@ -341,7 +367,7 @@ export function UploadCard() {
       </button>
 
       <p className="mt-3 text-center text-[11px] leading-5 text-slate-400">
-        Files are private by default and expire automatically based on your settings.
+        Any file extension is supported. Preview is limited to safe browser-supported media; other files are download-only.
       </p>
     </div>
   );
