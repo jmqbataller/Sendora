@@ -4,18 +4,22 @@
 
 Sendora is a modern file-sharing app for sharing virtually any file type through expiring links and QR codes.
 
-## v0.2 features
+## v0.3 features
 
-- Drag-and-drop upload for any file extension
+- Upload up to 100 files in one Sendora share
+- One share link and QR code for the whole batch
+- Drag-and-drop and multi-select upload for any file extension
 - Images, videos, audio, PDFs, documents, archives, code files, installers, and more
 - Configurable expiry: 1 hour, 24 hours, 3 days, or 7 days
-- Download limits: 1, 5, 10, 25, or unlimited
+- Download limits: 1, 5, 10, 25, or unlimited per file
 - Automatic share links
 - Instant QR code generation
+- Batch recipient page with file count, total size, and individual downloads
 - Browser previews for images, videos, audio, and PDFs
 - Download-only handling for unsupported or executable formats
 - Private Supabase Storage bucket
 - Server-generated signed download URLs
+- Original filenames preserved on download
 - Download counter and expiry enforcement
 - Responsive landing page and share experience
 - Default 200 MB per-file limit, configurable with an environment variable
@@ -42,7 +46,7 @@ npm install
 
 3. Open the Supabase SQL Editor and run `supabase/schema.sql`.
 
-   If you already ran an older Sendora schema, run the updated file again. It removes the bucket MIME allowlist so any file extension can be uploaded while keeping the file-size limit.
+   If you already ran an older Sendora schema, run the updated file again. The migration adds `share_code` and `position` for multi-file shares and keeps old single-file links compatible. It also removes the bucket MIME allowlist so any file extension can be uploaded while keeping the per-file size limit.
 
 4. Copy `.env.example` to `.env.local` and fill in:
 
@@ -68,12 +72,19 @@ Import this repository into Vercel, add the same environment variables, and depl
 
 > Keep `SUPABASE_SERVICE_ROLE_KEY` server-only. Never expose it with a `NEXT_PUBLIC_` prefix.
 
+## Upload limits
+
+- Maximum files per share: **100**
+- Default maximum size per file: **200 MB**
+- There is no app-level total batch-size cap, so your effective total upload capacity depends on your Supabase Storage quota, browser/network reliability, and hosting plan.
+
 ## Security note
 
 Sendora accepts arbitrary file extensions, but unsupported or executable formats are not rendered as browser previews. Recipients should only download files they trust. For a public production service, malware scanning and abuse controls should be added before allowing unrestricted anonymous uploads at scale.
 
 ## Roadmap
 
+- Download all files as ZIP
 - Password-protected shares
 - Delete-after-first-download mode
 - User accounts and upload history
