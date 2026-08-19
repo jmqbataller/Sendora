@@ -76,8 +76,6 @@ export async function POST(request: Request) {
 
     const supabase = createAdminClient();
 
-    // A share is identified by its private storage folder. This works with both
-    // the original Sendora schema and the newer optional share_code columns.
     const { data: existing, error: existingError } = await supabase
       .from("files")
       .select("id")
@@ -100,17 +98,26 @@ export async function POST(request: Request) {
       max_downloads: maxDownloads ?? null,
     }));
 
-    const extendedRows = files.map((file, index) => ({
-      ...legacyRows[index],
+    const shareCodeRows = legacyRows.map((row) => ({
+      ...row,
       share_code: shareCode,
+    }));
+
+    const extendedRows = files.map((file, index) => ({
+      ...shareCodeRows[index],
       position: typeof file.position === "number" && Number.isInteger(file.position) ? file.position : index,
     }));
 
     let { error: insertError } = await supabase.from("files").insert(extendedRows);
 
-    // Backward compatibility: older projects do not have share_code/position.
-    // Retry against the original table shape instead of forcing a migration.
-    if (insertError && (mentionsColumn(insertError, "share_code") || mentionsColumn(insertError, "position") || insertError.code === "PGRST204")) {
+    // Compatibility with an intermediate schema that has share_code but no position.
+    if (insertError && mentionsColumn(insertError, "position")) {
+      const shareCodeAttempt = await supabase.from("files").insert(shareCodeRows);
+      insertError = shareCodeAttempt.error;
+    }
+
+    // Compatibility with the original Sendora schema that has neither column.
+    if (insertError && (mentionsColumn(insertError, "share_code") || insertError.code === "PGRST204")) {
       const legacyAttempt = await supabase.from("files").insert(legacyRows);
       insertError = legacyAttempt.error;
     }
