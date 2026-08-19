@@ -46,7 +46,7 @@ npm install
 
 3. Open the Supabase SQL Editor and run `supabase/schema.sql`.
 
-   If you already ran an older Sendora schema, run the updated file again. The migration adds `share_code` and `position` for multi-file shares and keeps old single-file links compatible. It also removes the bucket MIME allowlist so any file extension can be uploaded while keeping the per-file size limit.
+   Multi-file sharing does **not** require extra database columns. Sendora groups batch files using their private Storage folder, so projects created with the original `files` table remain compatible. Re-running the current schema is still recommended if your Storage bucket has the old image/video MIME allowlist.
 
 4. Copy `.env.example` to `.env.local` and fill in:
 
