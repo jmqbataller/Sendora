@@ -16,12 +16,8 @@ export async function POST(request: Request) {
     const body = (await request.json()) as CreateFileBody;
     const { code, originalName, mimeType, sizeBytes, storagePath, expiresAt, maxDownloads } = body;
 
-    if (!code || !originalName || !mimeType || !sizeBytes || !storagePath || !expiresAt) {
+    if (!code || !originalName || !sizeBytes || !storagePath || !expiresAt) {
       return NextResponse.json({ error: "Missing required file metadata." }, { status: 400 });
-    }
-
-    if (!mimeType.startsWith("image/") && !mimeType.startsWith("video/")) {
-      return NextResponse.json({ error: "Unsupported file type." }, { status: 400 });
     }
 
     const maxMb = Number(process.env.NEXT_PUBLIC_MAX_FILE_MB || 200);
@@ -33,7 +29,7 @@ export async function POST(request: Request) {
     const { error } = await supabase.from("files").insert({
       code,
       original_name: originalName,
-      mime_type: mimeType,
+      mime_type: mimeType || "application/octet-stream",
       size_bytes: sizeBytes,
       storage_path: storagePath,
       expires_at: expiresAt,
