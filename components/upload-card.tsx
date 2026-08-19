@@ -26,6 +26,8 @@ type UploadResult = {
   url: string;
   fileCount: number;
   totalBytes: number;
+  originalBytes: number;
+  optimizedCount: number;
 };
 
 type UploadedFileRecord = {
@@ -37,8 +39,15 @@ type UploadedFileRecord = {
   position: number;
 };
 
+type ImageOptimizationLevel = "light" | "balanced" | "strong";
+
 const MAX_FILE_MB = Number(process.env.NEXT_PUBLIC_MAX_FILE_MB || 200);
 const MAX_FILES = 100;
+const IMAGE_PROFILES: Record<ImageOptimizationLevel, { quality: number; maxDimension: number; label: string }> = {
+  light: { quality: 0.9, maxDimension: 3200, label: "Light" },
+  balanced: { quality: 0.82, maxDimension: 2560, label: "Balanced" },
+  strong: { quality: 0.72, maxDimension: 1920, label: "Strong" },
+};
 
 function formatBytes(bytes: number) {
   if (bytes === 0) return "0 B";
@@ -58,6 +67,11 @@ function extensionOf(name: string) {
   return index > -1 && index < name.length - 1 ? name.slice(index + 1).toLowerCase() : "";
 }
 
+function baseName(name: string) {
+  const index = name.lastIndexOf(".");
+  return index > 0 ? name.slice(0, index) : name;
+}
+
 function fileKind(file: File) {
   const extension = extensionOf(file.name);
   if (file.type.startsWith("image/")) return "Image";
@@ -71,6 +85,48 @@ function fileKind(file: File) {
 
 function fileIdentity(file: File) {
   return `${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function canOptimizeImage(file: File) {
+  const extension = extensionOf(file.name);
+  return ["image/jpeg", "image/png", "image/webp"].includes(file.type) && !["gif", "svg", "svgz"].includes(extension);
+}
+
+async function optimizeImage(file: File, level: ImageOptimizationLevel) {
+  if (!canOptimizeImage(file)) return file;
+
+  try {
+    const profile = IMAGE_PROFILES[level];
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, profile.maxDimension / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+
+    const context = canvas.getContext("2d", { alpha: true });
+    if (!context) {
+      bitmap.close();
+      return file;
+    }
+
+    context.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, "image/webp", profile.quality);
+    });
+
+    if (!blob || blob.size >= file.size * 0.95) return file;
+
+    return new File([blob], `${baseName(file.name)}.webp`, {
+      type: "image/webp",
+      lastModified: file.lastModified,
+    });
+  } catch {
+    return file;
+  }
 }
 
 function FileTypeIcon({ file }: { file: File }) {
@@ -89,10 +145,13 @@ export function UploadCard() {
   const [files, setFiles] = useState<File[]>([]);
   const [expiresIn, setExpiresIn] = useState("3d");
   const [downloadLimit, setDownloadLimit] = useState("10");
+  const [optimizeImages, setOptimizeImages] = useState(true);
+  const [imageOptimizationLevel, setImageOptimizationLevel] = useState<ImageOptimizationLevel>("balanced");
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [uploadedCount, setUploadedCount] = useState(0);
+  const [statusText, setStatusText] = useState("");
   const [error, setError] = useState("");
   const [result, setResult] = useState<UploadResult | null>(null);
   const [copied, setCopied] = useState(false);
@@ -102,6 +161,7 @@ export function UploadCard() {
   );
 
   const totalBytes = useMemo(() => files.reduce((sum, file) => sum + file.size, 0), [files]);
+  const optimizableCount = useMemo(() => files.filter(canOptimizeImage).length, [files]);
 
   function addFiles(nextFiles: File[]) {
     setError("");
@@ -149,6 +209,7 @@ export function UploadCard() {
     setResult(null);
     setProgress(0);
     setUploadedCount(0);
+    setStatusText("");
     setError("");
   }
 
@@ -166,6 +227,7 @@ export function UploadCard() {
     setUploading(true);
     setProgress(2);
     setUploadedCount(0);
+    setStatusText("Preparing files…");
 
     const uploadedPaths: string[] = [];
     let supabase: ReturnType<typeof createClient> | null = null;
@@ -178,31 +240,43 @@ export function UploadCard() {
       supabase = createClient();
       const shareCode = randomCode();
       const records: UploadedFileRecord[] = [];
+      let uploadedBytes = 0;
+      let optimizedCount = 0;
 
       for (let index = 0; index < files.length; index += 1) {
-        const file = files[index];
+        const originalFile = files[index];
+        let uploadFile = originalFile;
+
+        if (optimizeImages && canOptimizeImage(originalFile)) {
+          setStatusText(`Optimizing image ${index + 1} of ${files.length}…`);
+          uploadFile = await optimizeImage(originalFile, imageOptimizationLevel);
+          if (uploadFile !== originalFile) optimizedCount += 1;
+        }
+
+        setStatusText(`Uploading file ${index + 1} of ${files.length}…`);
         const fileCode = randomCode();
-        const rawExtension = extensionOf(file.name);
+        const rawExtension = extensionOf(uploadFile.name);
         const safeExtension = rawExtension.replace(/[^a-z0-9]/gi, "").slice(0, 24);
         const storagePath = `${shareCode}/${String(index + 1).padStart(3, "0")}-${crypto.randomUUID()}${safeExtension ? `.${safeExtension}` : ""}`;
-        const mimeType = file.type || "application/octet-stream";
+        const mimeType = uploadFile.type || "application/octet-stream";
 
         const { error: uploadError } = await supabase.storage
           .from("sendora-files")
-          .upload(storagePath, file, {
+          .upload(storagePath, uploadFile, {
             cacheControl: "3600",
             contentType: mimeType,
             upsert: false,
           });
 
-        if (uploadError) throw new Error(`${file.name}: ${uploadError.message}`);
+        if (uploadError) throw new Error(`${originalFile.name}: ${uploadError.message}`);
 
         uploadedPaths.push(storagePath);
+        uploadedBytes += uploadFile.size;
         records.push({
           code: fileCode,
-          originalName: file.name,
+          originalName: uploadFile.name,
           mimeType,
-          sizeBytes: file.size,
+          sizeBytes: uploadFile.size,
           storagePath,
           position: index,
         });
@@ -212,6 +286,7 @@ export function UploadCard() {
         setProgress(Math.max(4, Math.round((completed / files.length) * 86)));
       }
 
+      setStatusText("Creating share link…");
       setProgress(92);
       const response = await fetch("/api/files", {
         method: "POST",
@@ -231,7 +306,15 @@ export function UploadCard() {
 
       const url = `${window.location.origin}/s/${shareCode}`;
       setProgress(100);
-      setResult({ shareCode, url, fileCount: files.length, totalBytes });
+      setStatusText("Done");
+      setResult({
+        shareCode,
+        url,
+        fileCount: files.length,
+        totalBytes: uploadedBytes,
+        originalBytes: totalBytes,
+        optimizedCount,
+      });
     } catch (uploadError) {
       if (supabase && uploadedPaths.length > 0) {
         await supabase.storage.from("sendora-files").remove(uploadedPaths).catch(() => undefined);
@@ -250,6 +333,8 @@ export function UploadCard() {
   }
 
   if (result) {
+    const savedBytes = Math.max(0, result.originalBytes - result.totalBytes);
+
     return (
       <div className="relative overflow-hidden rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_80px_rgba(15,23,42,0.10)] sm:p-7">
         <div className="pointer-events-none absolute -right-12 -top-16 size-44 rounded-full bg-blue-100 blur-3xl" />
@@ -294,6 +379,11 @@ export function UploadCard() {
               <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-500">
                 <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1.5">{result.fileCount} {result.fileCount === 1 ? "file" : "files"}</span>
                 <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1.5">{formatBytes(result.totalBytes)}</span>
+                {result.optimizedCount > 0 && savedBytes > 0 ? (
+                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-emerald-700">
+                    {result.optimizedCount} image{result.optimizedCount === 1 ? "" : "s"} optimized · saved {formatBytes(savedBytes)}
+                  </span>
+                ) : null}
                 <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1.5">Expires: {expiresIn}</span>
                 <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1.5">Downloads/file: {downloadLimit === "unlimited" ? "Unlimited" : downloadLimit}</span>
               </div>
@@ -367,7 +457,10 @@ export function UploadCard() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold text-slate-800">{file.name}</p>
-                  <p className="mt-0.5 text-xs text-slate-400">{fileKind(file)} · {formatBytes(file.size)}</p>
+                  <p className="mt-0.5 text-xs text-slate-400">
+                    {fileKind(file)} · {formatBytes(file.size)}
+                    {optimizeImages && canOptimizeImage(file) ? " · will optimize" : ""}
+                  </p>
                 </div>
                 {!uploading ? (
                   <button
@@ -384,6 +477,57 @@ export function UploadCard() {
           </div>
         </div>
       ) : null}
+
+      <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex min-w-0 gap-3">
+            <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-blue-50 text-blue-600">
+              <FileImage className="size-5" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-slate-800">Automatically reduce image size</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                JPEG, PNG and WebP images are resized/compressed before upload. A WebP copy is used only when it is meaningfully smaller.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            role="switch"
+            aria-checked={optimizeImages}
+            disabled={uploading}
+            onClick={() => setOptimizeImages((value) => !value)}
+            className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition ${optimizeImages ? "bg-blue-600" : "bg-slate-300"} disabled:opacity-60`}
+          >
+            <span className={`absolute top-0.5 size-5 rounded-full bg-white shadow-sm transition ${optimizeImages ? "left-[22px]" : "left-0.5"}`} />
+          </button>
+        </div>
+
+        {optimizeImages ? (
+          <div className="mt-3 flex flex-col gap-2 border-t border-slate-200 pt-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-xs font-semibold text-slate-600">Compression level</p>
+              <p className="mt-0.5 text-[11px] text-slate-400">
+                {optimizableCount > 0 ? `${optimizableCount} selected image${optimizableCount === 1 ? "" : "s"} can be optimized.` : "Add JPEG, PNG or WebP files to use this option."}
+              </p>
+            </div>
+            <div className="relative sm:w-40">
+              <select
+                value={imageOptimizationLevel}
+                disabled={uploading}
+                onChange={(event) => setImageOptimizationLevel(event.target.value as ImageOptimizationLevel)}
+                className="h-10 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 pr-8 text-xs font-semibold text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:opacity-60"
+              >
+                <option value="light">Light</option>
+                <option value="balanced">Balanced</option>
+                <option value="strong">Strong</option>
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
+            </div>
+          </div>
+        ) : null}
+      </div>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <label className="block">
@@ -429,7 +573,7 @@ export function UploadCard() {
       {uploading ? (
         <div className="mt-4">
           <div className="mb-2 flex items-center justify-between gap-4 text-xs font-medium text-slate-500">
-            <span>{uploadedCount < files.length ? `Uploading file ${uploadedCount + 1} of ${files.length}…` : "Creating share link…"}</span>
+            <span>{statusText || (uploadedCount < files.length ? `Uploading file ${uploadedCount + 1} of ${files.length}…` : "Creating share link…")}</span>
             <span>{progress}%</span>
           </div>
           <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
@@ -449,7 +593,7 @@ export function UploadCard() {
       </button>
 
       <p className="mt-3 text-center text-[11px] leading-5 text-slate-400">
-        Up to 100 files per share. Files stay private and expire automatically based on your settings.
+        Up to 100 files per share. Image optimization happens on your device before upload.
       </p>
     </div>
   );
