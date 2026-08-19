@@ -13,6 +13,7 @@ import {
   Music,
   ShieldCheck,
 } from "lucide-react";
+import { BulkDownloadButton } from "@/components/bulk-download-button";
 import { Logo } from "@/components/logo";
 import { createAdminClient } from "@/lib/supabase/server";
 
@@ -58,8 +59,6 @@ export default async function SharePage({ params }: { params: Promise<{ code: st
   const { code } = await params;
   const supabase = createAdminClient();
 
-  // Files in the same share live under the same storage folder:
-  // SHARECODE/001-..., SHARECODE/002-..., etc. This keeps old schemas compatible.
   const { data: sharedFiles, error: filesError } = await supabase
     .from("files")
     .select("code, original_name, mime_type, size_bytes, storage_path, expires_at, max_downloads, download_count")
@@ -77,14 +76,12 @@ export default async function SharePage({ params }: { params: Promise<{ code: st
   const expiresAt = sharedFiles[0].expires_at;
   const expired = new Date(expiresAt).getTime() <= Date.now();
   const maxDownloads = sharedFiles[0].max_downloads;
+  const availableFiles = expired
+    ? []
+    : sharedFiles.filter((file) => file.max_downloads === null || file.download_count < file.max_downloads);
+  const availableBytes = availableFiles.reduce((sum, file) => sum + Number(file.size_bytes), 0);
 
-  const previewFile = !expired
-    ? sharedFiles.find(
-        (file) =>
-          isPreviewable(file.original_name, file.mime_type) &&
-          (file.max_downloads === null || file.download_count < file.max_downloads),
-      )
-    : undefined;
+  const previewFile = availableFiles.find((file) => isPreviewable(file.original_name, file.mime_type));
 
   let previewUrl: string | null = null;
   if (previewFile) {
@@ -102,7 +99,7 @@ export default async function SharePage({ params }: { params: Promise<{ code: st
 
         <div className="py-10 lg:py-14">
           <div className="mb-6 rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm sm:p-7">
-            <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
                   <ShieldCheck className="size-3.5" /> Shared with Sendora
@@ -134,6 +131,26 @@ export default async function SharePage({ params }: { params: Promise<{ code: st
             {expired ? (
               <div className="mt-5 rounded-2xl bg-rose-50 p-4 text-sm font-medium leading-6 text-rose-700">
                 This Sendora share has expired. The files are no longer available for download.
+              </div>
+            ) : null}
+
+            {availableFiles.length > 1 ? (
+              <div className="mt-5 flex flex-col gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">Need everything at once?</p>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                    Bundle {availableFiles.length} available files into one ZIP. This counts as one download for each file.
+                  </p>
+                </div>
+                <BulkDownloadButton
+                  files={availableFiles.map((file) => ({
+                    code: file.code,
+                    name: file.original_name,
+                    sizeBytes: Number(file.size_bytes),
+                  }))}
+                  shareCode={code}
+                  totalBytes={availableBytes}
+                />
               </div>
             ) : null}
           </div>
