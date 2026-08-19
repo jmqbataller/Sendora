@@ -8,7 +8,7 @@ export async function GET(_request: Request, context: { params: Promise<{ code: 
 
     const { data: file, error } = await supabase
       .from("files")
-      .select("id, storage_path, expires_at, max_downloads, download_count")
+      .select("id, original_name, storage_path, expires_at, max_downloads, download_count")
       .eq("code", code)
       .single();
 
@@ -26,7 +26,7 @@ export async function GET(_request: Request, context: { params: Promise<{ code: 
 
     const { data: signed, error: signedError } = await supabase.storage
       .from("sendora-files")
-      .createSignedUrl(file.storage_path, 60, { download: true });
+      .createSignedUrl(file.storage_path, 60, { download: file.original_name });
 
     if (signedError || !signed?.signedUrl) throw signedError || new Error("Could not create download URL.");
 
