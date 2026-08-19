@@ -58,11 +58,17 @@ export default async function SharePage({ params }: { params: Promise<{ code: st
   const { code } = await params;
   const supabase = createAdminClient();
 
-  const { data: sharedFiles } = await supabase
+  // Files in the same share live under the same storage folder:
+  // SHARECODE/001-..., SHARECODE/002-..., etc. This keeps old schemas compatible.
+  const { data: sharedFiles, error: filesError } = await supabase
     .from("files")
-    .select("code, original_name, mime_type, size_bytes, storage_path, expires_at, max_downloads, download_count, position")
-    .eq("share_code", code)
-    .order("position", { ascending: true });
+    .select("code, original_name, mime_type, size_bytes, storage_path, expires_at, max_downloads, download_count")
+    .like("storage_path", `${code}/%`)
+    .order("storage_path", { ascending: true });
+
+  if (filesError) {
+    console.error("Could not load Sendora share:", filesError);
+  }
 
   if (!sharedFiles || sharedFiles.length === 0) notFound();
 
