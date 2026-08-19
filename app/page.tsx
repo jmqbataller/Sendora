@@ -15,15 +15,15 @@ import { Logo } from "@/components/logo";
 import { UploadCard } from "@/components/upload-card";
 
 const steps = [
-  { icon: FileUp, number: "01", title: "Choose your file", body: "Drop an image or video and Sendora handles the rest." },
-  { icon: Gauge, number: "02", title: "Set the limits", body: "Pick an expiry window and how many downloads are allowed." },
-  { icon: ScanLine, number: "03", title: "Share instantly", body: "Copy the secure link or let someone scan the QR code." },
+  { icon: FileUp, number: "01", title: "Choose your files", body: "Drop one file or a batch of up to 100 files and Sendora handles the rest." },
+  { icon: Gauge, number: "02", title: "Set the limits", body: "Pick an expiry window and how many downloads are allowed for each file." },
+  { icon: ScanLine, number: "03", title: "Share instantly", body: "One secure link and QR code opens the entire file collection." },
 ];
 
 const features = [
-  { icon: Clock3, title: "Auto-expiring files", body: "Files stop being available automatically after the window you choose." },
-  { icon: Download, title: "Download controls", body: "Limit a file to one download or keep it available for your whole team." },
-  { icon: QrCode, title: "Instant QR codes", body: "Every upload gets a QR code so sharing from screen to phone takes seconds." },
+  { icon: Clock3, title: "Auto-expiring shares", body: "Your whole share stops being available automatically after the window you choose." },
+  { icon: Download, title: "Download controls", body: "Set a download cap per file or keep files available for your whole team." },
+  { icon: QrCode, title: "Instant QR codes", body: "Every share gets a QR code so moving files from screen to phone takes seconds." },
   { icon: ShieldCheck, title: "Private by default", body: "Uploads live in private storage and are served through controlled share routes." },
 ];
 
@@ -42,7 +42,7 @@ export default function Home() {
             href="#upload"
             className="inline-flex h-10 items-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-blue-600"
           >
-            Send a file <ArrowRight className="size-4" />
+            Send files <ArrowRight className="size-4" />
           </a>
         </div>
       </header>
@@ -57,13 +57,13 @@ export default function Home() {
         <div className="relative mx-auto grid max-w-7xl gap-14 px-5 pb-24 pt-16 sm:px-8 sm:pt-20 lg:grid-cols-[0.92fr_1.08fr] lg:items-center lg:px-10 lg:pb-28 lg:pt-24">
           <div className="max-w-2xl">
             <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700">
-              <Sparkles className="size-3.5" /> No account needed for quick sharing
+              <Sparkles className="size-3.5" /> Up to 100 files in one share
             </div>
             <h1 className="text-balance text-5xl font-semibold tracking-[-0.055em] text-slate-950 sm:text-6xl lg:text-[72px] lg:leading-[0.98]">
               Send files without the friction.
             </h1>
             <p className="mt-6 max-w-xl text-pretty text-lg leading-8 text-slate-500 sm:text-xl">
-              Upload an image or video, choose your limits, and share it anywhere with a clean link or instant QR code.
+              Upload virtually any file type, bundle up to 100 files together, choose your limits, and share everything with one clean link or instant QR code.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3 text-sm font-medium text-slate-500">
               <span className="flex items-center gap-2"><LockKeyhole className="size-4 text-blue-600" /> Private storage</span>
@@ -111,7 +111,7 @@ export default function Home() {
             <div className="sticky top-28">
               <p className="text-sm font-semibold uppercase tracking-[0.18em] text-blue-600">Built for sharing</p>
               <h2 className="mt-3 max-w-lg text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">The controls you need. Nothing you don&apos;t.</h2>
-              <p className="mt-5 max-w-md leading-7 text-slate-500">Sendora keeps the workflow intentionally small so you can share something securely without setting up a complicated workspace.</p>
+              <p className="mt-5 max-w-md leading-7 text-slate-500">Sendora keeps the workflow intentionally small so you can share one file or an entire batch without setting up a complicated workspace.</p>
             </div>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -132,11 +132,11 @@ export default function Home() {
           <div className="relative grid gap-10 lg:grid-cols-[1fr_auto] lg:items-center">
             <div className="max-w-2xl">
               <p className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-300"><ShieldCheck className="size-4" /> Share with control</p>
-              <h2 className="text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">Your file doesn&apos;t need to live online forever.</h2>
-              <p className="mt-4 max-w-xl leading-7 text-slate-300">Set an expiry and a download cap before you share. When a link reaches its limit, Sendora stops serving the file.</p>
+              <h2 className="text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">Your files don&apos;t need to live online forever.</h2>
+              <p className="mt-4 max-w-xl leading-7 text-slate-300">Set an expiry and a per-file download cap before you share. When a file reaches its limit, Sendora stops serving it.</p>
             </div>
             <a href="#upload" className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-white px-5 text-sm font-semibold text-slate-950 transition hover:-translate-y-0.5 hover:bg-blue-50">
-              Upload a file <ArrowRight className="size-4" />
+              Upload files <ArrowRight className="size-4" />
             </a>
           </div>
         </div>
