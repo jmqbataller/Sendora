@@ -75,7 +75,7 @@ export async function POST(request: Request) {
     const rows = files.map((file, index) => ({
       code: file.code,
       share_code: shareCode,
-      position: Number.isInteger(file.position) ? file.position : index,
+      position: typeof file.position === "number" && Number.isInteger(file.position) ? file.position : index,
       original_name: file.originalName,
       mime_type: file.mimeType || "application/octet-stream",
       size_bytes: file.sizeBytes,
