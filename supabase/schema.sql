@@ -1,5 +1,5 @@
--- Sendora v0.1 database + storage setup
--- Run this in the Supabase SQL editor for a new project.
+-- Sendora database + storage setup
+-- Run this in the Supabase SQL editor for a new or existing project.
 
 create extension if not exists pgcrypto;
 
@@ -7,7 +7,7 @@ create table if not exists public.files (
   id uuid primary key default gen_random_uuid(),
   code text unique not null,
   original_name text not null,
-  mime_type text not null,
+  mime_type text not null default 'application/octet-stream',
   size_bytes bigint not null check (size_bytes > 0),
   storage_path text unique not null,
   created_at timestamptz not null default now(),
@@ -30,18 +30,29 @@ values (
   'sendora-files',
   false,
   209715200,
-  array['image/jpeg','image/png','image/webp','image/gif','video/mp4','video/webm','video/quicktime']
+  null
 )
 on conflict (id) do update set
   public = excluded.public,
   file_size_limit = excluded.file_size_limit,
-  allowed_mime_types = excluded.allowed_mime_types;
+  allowed_mime_types = null;
 
 -- Anonymous browser uploads are allowed into the private bucket.
--- The generated object path is unguessable and download access remains signed.
-create policy "anon can upload sendora files"
-on storage.objects for insert
-to anon
-with check (bucket_id = 'sendora-files');
+-- File type is intentionally unrestricted; the size cap still applies.
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'storage'
+      and tablename = 'objects'
+      and policyname = 'anon can upload sendora files'
+  ) then
+    create policy "anon can upload sendora files"
+    on storage.objects for insert
+    to anon
+    with check (bucket_id = 'sendora-files');
+  end if;
+end $$;
 
 -- No public SELECT policy: files cannot be read directly with the anon key.
