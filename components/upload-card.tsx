@@ -22,11 +22,23 @@ import { QRCodeSVG } from "qrcode.react";
 import { createClient } from "@/lib/supabase/client";
 
 type UploadResult = {
-  code: string;
+  shareCode: string;
   url: string;
+  fileCount: number;
+  totalBytes: number;
+};
+
+type UploadedFileRecord = {
+  code: string;
+  originalName: string;
+  mimeType: string;
+  sizeBytes: number;
+  storagePath: string;
+  position: number;
 };
 
 const MAX_FILE_MB = Number(process.env.NEXT_PUBLIC_MAX_FILE_MB || 200);
+const MAX_FILES = 100;
 
 function formatBytes(bytes: number) {
   if (bytes === 0) return "0 B";
@@ -57,6 +69,10 @@ function fileKind(file: File) {
   return extension ? `${extension.toUpperCase()} file` : "File";
 }
 
+function fileIdentity(file: File) {
+  return `${file.name}:${file.size}:${file.lastModified}`;
+}
+
 function FileTypeIcon({ file }: { file: File }) {
   const extension = extensionOf(file.name);
   if (file.type.startsWith("image/")) return <FileImage className="size-5" />;
@@ -70,12 +86,13 @@ function FileTypeIcon({ file }: { file: File }) {
 
 export function UploadCard() {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [expiresIn, setExpiresIn] = useState("3d");
   const [downloadLimit, setDownloadLimit] = useState("10");
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [uploadedCount, setUploadedCount] = useState(0);
   const [error, setError] = useState("");
   const [result, setResult] = useState<UploadResult | null>(null);
   const [copied, setCopied] = useState(false);
@@ -84,29 +101,55 @@ export function UploadCard() {
     process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   );
 
-  const fileTypeLabel = useMemo(() => (file ? fileKind(file) : ""), [file]);
+  const totalBytes = useMemo(() => files.reduce((sum, file) => sum + file.size, 0), [files]);
 
-  function chooseFile(nextFile?: File) {
+  function addFiles(nextFiles: File[]) {
     setError("");
     setResult(null);
-    if (!nextFile) return;
+    if (nextFiles.length === 0) return;
 
-    if (nextFile.size > MAX_FILE_MB * 1024 * 1024) {
-      setError(`That file is larger than the ${MAX_FILE_MB} MB upload limit.`);
-      return;
+    const existing = new Set(files.map(fileIdentity));
+    const unique = nextFiles.filter((file) => !existing.has(fileIdentity(file)));
+    const oversized = unique.filter((file) => file.size > MAX_FILE_MB * 1024 * 1024);
+    const valid = unique.filter((file) => file.size <= MAX_FILE_MB * 1024 * 1024);
+    const availableSlots = Math.max(0, MAX_FILES - files.length);
+    const accepted = valid.slice(0, availableSlots);
+    const skippedForLimit = Math.max(0, valid.length - accepted.length);
+
+    if (accepted.length > 0) {
+      setFiles((current) => [...current, ...accepted]);
     }
 
-    setFile(nextFile);
+    const messages: string[] = [];
+    if (oversized.length > 0) messages.push(`${oversized.length} file${oversized.length === 1 ? " was" : "s were"} over ${MAX_FILE_MB} MB and skipped.`);
+    if (skippedForLimit > 0) messages.push(`Sendora allows a maximum of ${MAX_FILES} files per share.`);
+    if (unique.length === 0) messages.push("Those files are already in this share.");
+    if (messages.length > 0) setError(messages.join(" "));
   }
 
   function onInput(event: ChangeEvent<HTMLInputElement>) {
-    chooseFile(event.target.files?.[0]);
+    addFiles(Array.from(event.target.files || []));
+    event.target.value = "";
   }
 
   function onDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setDragging(false);
-    chooseFile(event.dataTransfer.files?.[0]);
+    addFiles(Array.from(event.dataTransfer.files || []));
+  }
+
+  function removeFile(index: number) {
+    if (uploading) return;
+    setFiles((current) => current.filter((_, fileIndex) => fileIndex !== index));
+    setError("");
+  }
+
+  function resetShare() {
+    setFiles([]);
+    setResult(null);
+    setProgress(0);
+    setUploadedCount(0);
+    setError("");
   }
 
   function expiryDate() {
@@ -117,59 +160,82 @@ export function UploadCard() {
   }
 
   async function upload() {
-    if (!file) return;
+    if (files.length === 0) return;
+
     setError("");
     setUploading(true);
-    setProgress(12);
+    setProgress(2);
+    setUploadedCount(0);
+
+    const uploadedPaths: string[] = [];
+    let supabase: ReturnType<typeof createClient> | null = null;
 
     try {
       if (!isConfigured) {
         throw new Error("Storage is not configured yet. Add the Supabase environment variables first.");
       }
 
-      const supabase = createClient();
-      const code = randomCode();
-      const rawExtension = extensionOf(file.name);
-      const safeExtension = rawExtension.replace(/[^a-z0-9]/gi, "").slice(0, 24);
-      const storagePath = `${code}/${crypto.randomUUID()}${safeExtension ? `.${safeExtension}` : ""}`;
-      const mimeType = file.type || "application/octet-stream";
+      supabase = createClient();
+      const shareCode = randomCode();
+      const records: UploadedFileRecord[] = [];
 
-      setProgress(30);
-      const { error: uploadError } = await supabase.storage
-        .from("sendora-files")
-        .upload(storagePath, file, {
-          cacheControl: "3600",
-          contentType: mimeType,
-          upsert: false,
-        });
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        const fileCode = randomCode();
+        const rawExtension = extensionOf(file.name);
+        const safeExtension = rawExtension.replace(/[^a-z0-9]/gi, "").slice(0, 24);
+        const storagePath = `${shareCode}/${String(index + 1).padStart(3, "0")}-${crypto.randomUUID()}${safeExtension ? `.${safeExtension}` : ""}`;
+        const mimeType = file.type || "application/octet-stream";
 
-      if (uploadError) throw uploadError;
-      setProgress(76);
+        const { error: uploadError } = await supabase.storage
+          .from("sendora-files")
+          .upload(storagePath, file, {
+            cacheControl: "3600",
+            contentType: mimeType,
+            upsert: false,
+          });
 
-      const response = await fetch("/api/files", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          code,
+        if (uploadError) throw new Error(`${file.name}: ${uploadError.message}`);
+
+        uploadedPaths.push(storagePath);
+        records.push({
+          code: fileCode,
           originalName: file.name,
           mimeType,
           sizeBytes: file.size,
           storagePath,
+          position: index,
+        });
+
+        const completed = index + 1;
+        setUploadedCount(completed);
+        setProgress(Math.max(4, Math.round((completed / files.length) * 86)));
+      }
+
+      setProgress(92);
+      const response = await fetch("/api/files", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shareCode,
+          files: records,
           expiresAt: expiryDate(),
           maxDownloads: downloadLimit === "unlimited" ? null : Number(downloadLimit),
         }),
       });
 
       if (!response.ok) {
-        await supabase.storage.from("sendora-files").remove([storagePath]);
         const body = await response.json().catch(() => ({}));
         throw new Error(body.error || "Could not create the share link.");
       }
 
-      const url = `${window.location.origin}/s/${code}`;
+      const url = `${window.location.origin}/s/${shareCode}`;
       setProgress(100);
-      setResult({ code, url });
+      setResult({ shareCode, url, fileCount: files.length, totalBytes });
     } catch (uploadError) {
+      if (supabase && uploadedPaths.length > 0) {
+        await supabase.storage.from("sendora-files").remove(uploadedPaths).catch(() => undefined);
+      }
       setError(uploadError instanceof Error ? uploadError.message : "Upload failed. Please try again.");
     } finally {
       setUploading(false);
@@ -193,18 +259,14 @@ export function UploadCard() {
               <span className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
                 <Check className="size-3.5" /> Upload complete
               </span>
-              <h3 className="text-xl font-semibold tracking-tight text-slate-950">Ready to share</h3>
-              <p className="mt-1 text-sm text-slate-500">Anyone with this link or QR code can open your file.</p>
+              <h3 className="text-xl font-semibold tracking-tight text-slate-950">{result.fileCount} {result.fileCount === 1 ? "file" : "files"} ready to share</h3>
+              <p className="mt-1 text-sm text-slate-500">One link and QR code opens the entire Sendora share.</p>
             </div>
             <button
               type="button"
-              onClick={() => {
-                setFile(null);
-                setResult(null);
-                setProgress(0);
-              }}
+              onClick={resetShare}
               className="grid size-9 place-items-center rounded-full border border-slate-200 text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
-              aria-label="Upload another file"
+              aria-label="Create another share"
             >
               <X className="size-4" />
             </button>
@@ -230,10 +292,10 @@ export function UploadCard() {
               </div>
 
               <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-500">
+                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1.5">{result.fileCount} {result.fileCount === 1 ? "file" : "files"}</span>
+                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1.5">{formatBytes(result.totalBytes)}</span>
                 <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1.5">Expires: {expiresIn}</span>
-                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1.5">
-                  Downloads: {downloadLimit === "unlimited" ? "Unlimited" : downloadLimit}
-                </span>
+                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1.5">Downloads/file: {downloadLimit === "unlimited" ? "Unlimited" : downloadLimit}</span>
               </div>
             </div>
 
@@ -261,49 +323,67 @@ export function UploadCard() {
         onDragOver={(event) => event.preventDefault()}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
-        onClick={() => inputRef.current?.click()}
+        onClick={() => !uploading && inputRef.current?.click()}
         className={`group relative cursor-pointer overflow-hidden rounded-[22px] border border-dashed p-7 text-center transition sm:p-10 ${
           dragging
             ? "border-blue-500 bg-blue-50/70"
             : "border-slate-300 bg-slate-50/70 hover:border-blue-400 hover:bg-blue-50/40"
         }`}
       >
-        <input ref={inputRef} type="file" onChange={onInput} className="hidden" />
+        <input ref={inputRef} type="file" multiple onChange={onInput} className="hidden" />
         <div className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl bg-white text-blue-600 shadow-sm ring-1 ring-slate-200 transition group-hover:-translate-y-1 group-hover:shadow-md">
           <UploadCloud className="size-6" />
         </div>
-        <h3 className="text-lg font-semibold tracking-tight text-slate-950">Drop any file here</h3>
-        <p className="mt-1.5 text-sm text-slate-500">or click to browse from your device</p>
+        <h3 className="text-lg font-semibold tracking-tight text-slate-950">Drop up to 100 files here</h3>
+        <p className="mt-1.5 text-sm text-slate-500">or click to select multiple files from your device</p>
         <div className="mt-4 flex flex-wrap items-center justify-center gap-2 text-xs text-slate-400">
           <span>Any file extension</span>
           <span className="size-1 rounded-full bg-slate-300" />
-          <span>Up to {MAX_FILE_MB} MB</span>
+          <span>Max {MAX_FILES} files</span>
+          <span className="size-1 rounded-full bg-slate-300" />
+          <span>Up to {MAX_FILE_MB} MB each</span>
         </div>
       </div>
 
-      {file && (
-        <div className="mt-4 flex items-center gap-3 rounded-2xl border border-slate-200 p-3.5">
-          <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-blue-50 text-blue-600">
-            <FileTypeIcon file={file} />
+      {files.length > 0 ? (
+        <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200">
+          <div className="flex items-center justify-between gap-4 border-b border-slate-200 bg-slate-50/70 px-4 py-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-800">{files.length} / {MAX_FILES} files selected</p>
+              <p className="mt-0.5 text-xs text-slate-400">{formatBytes(totalBytes)} total</p>
+            </div>
+            {!uploading ? (
+              <button type="button" onClick={() => setFiles([])} className="text-xs font-semibold text-slate-500 transition hover:text-rose-600">
+                Clear all
+              </button>
+            ) : null}
           </div>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-slate-800">{file.name}</p>
-            <p className="mt-0.5 text-xs text-slate-400">{fileTypeLabel} · {formatBytes(file.size)}</p>
+
+          <div className="max-h-64 divide-y divide-slate-100 overflow-y-auto">
+            {files.map((file, index) => (
+              <div key={`${fileIdentity(file)}:${index}`} className="flex items-center gap-3 px-3.5 py-3">
+                <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-blue-50 text-blue-600">
+                  <FileTypeIcon file={file} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-slate-800">{file.name}</p>
+                  <p className="mt-0.5 text-xs text-slate-400">{fileKind(file)} · {formatBytes(file.size)}</p>
+                </div>
+                {!uploading ? (
+                  <button
+                    type="button"
+                    onClick={() => removeFile(index)}
+                    className="grid size-8 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-900"
+                    aria-label={`Remove ${file.name}`}
+                  >
+                    <X className="size-4" />
+                  </button>
+                ) : null}
+              </div>
+            ))}
           </div>
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              setFile(null);
-              if (inputRef.current) inputRef.current.value = "";
-            }}
-            className="grid size-8 place-items-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-900"
-            aria-label="Remove selected file"
-          >
-            <X className="size-4" />
-          </button>
         </div>
-      )}
+      ) : null}
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <label className="block">
@@ -311,8 +391,9 @@ export function UploadCard() {
           <div className="relative">
             <select
               value={expiresIn}
+              disabled={uploading}
               onChange={(event) => setExpiresIn(event.target.value)}
-              className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3.5 pr-9 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+              className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3.5 pr-9 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:opacity-60"
             >
               <option value="1h">1 hour</option>
               <option value="24h">24 hours</option>
@@ -324,12 +405,13 @@ export function UploadCard() {
         </label>
 
         <label className="block">
-          <span className="mb-1.5 block text-xs font-semibold text-slate-500">Download limit</span>
+          <span className="mb-1.5 block text-xs font-semibold text-slate-500">Download limit per file</span>
           <div className="relative">
             <select
               value={downloadLimit}
+              disabled={uploading}
               onChange={(event) => setDownloadLimit(event.target.value)}
-              className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3.5 pr-9 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+              className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3.5 pr-9 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:opacity-60"
             >
               <option value="1">1 download</option>
               <option value="5">5 downloads</option>
@@ -342,32 +424,32 @@ export function UploadCard() {
         </label>
       </div>
 
-      {error && <p className="mt-3 rounded-xl bg-rose-50 px-3.5 py-2.5 text-sm font-medium text-rose-700">{error}</p>}
+      {error ? <p className="mt-3 rounded-xl bg-rose-50 px-3.5 py-2.5 text-sm font-medium text-rose-700">{error}</p> : null}
 
-      {uploading && (
+      {uploading ? (
         <div className="mt-4">
-          <div className="mb-2 flex items-center justify-between text-xs font-medium text-slate-500">
-            <span>Uploading securely…</span>
+          <div className="mb-2 flex items-center justify-between gap-4 text-xs font-medium text-slate-500">
+            <span>{uploadedCount < files.length ? `Uploading file ${uploadedCount + 1} of ${files.length}…` : "Creating share link…"}</span>
             <span>{progress}%</span>
           </div>
           <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
             <div className="h-full rounded-full bg-blue-600 transition-all duration-500" style={{ width: `${progress}%` }} />
           </div>
         </div>
-      )}
+      ) : null}
 
       <button
         type="button"
         onClick={upload}
-        disabled={!file || uploading}
+        disabled={files.length === 0 || uploading}
         className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white shadow-[0_10px_30px_rgba(15,23,42,0.18)] transition hover:-translate-y-0.5 hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-y-0"
       >
         {uploading ? <LoaderCircle className="size-4.5 animate-spin" /> : <UploadCloud className="size-4.5" />}
-        {uploading ? "Uploading…" : "Upload & create link"}
+        {uploading ? "Uploading…" : files.length === 1 ? "Upload file & create link" : `Upload ${files.length || ""} files & create link`}
       </button>
 
       <p className="mt-3 text-center text-[11px] leading-5 text-slate-400">
-        Any file extension is supported. Preview is limited to safe browser-supported media; other files are download-only.
+        Up to 100 files per share. Files stay private and expire automatically based on your settings.
       </p>
     </div>
   );
